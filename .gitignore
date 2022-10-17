@@ -1,0 +1,7 @@
+/build
+/dist
+/plugin.so
+/plugin.dylib
+/plugin.dll
+vcpkg_installed/
+.DS_Store

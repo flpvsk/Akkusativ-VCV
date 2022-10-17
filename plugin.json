@@ -1,0 +1,23 @@
+{
+  "slug": "Akkusativ",
+  "name": "Akkusativ",
+  "version": "2.0.0",
+  "license": "MIT",
+  "brand": "Akkusativ",
+  "author": "Akkusativ",
+  "authorEmail": "hey@akkusativ.cc",
+  "authorUrl": "akkusativ.cc",
+  "pluginUrl": "",
+  "manualUrl": "",
+  "sourceUrl": "",
+  "donateUrl": "",
+  "changelogUrl": "",
+  "modules": [
+    {
+      "slug": "CVtoOSC",
+      "name": "CV -> OSC",
+      "description": "",
+      "tags": []
+    }
+  ]
+}
