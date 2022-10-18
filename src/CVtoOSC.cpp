@@ -6,25 +6,18 @@
 
 #include <oscpp/client.hpp>
 
+#define MICROS_PER_SEC         1000000
+#define us2s(x) (((double)x)/(double)MICROS_PER_SEC)
+
 uint64_t getCurrentTime() {
-  union {
-    uint64_t full;
-
-    struct ntp_ts_t {
-      uint32_t seconds;
-      uint32_t fraction;
-    } parts;
-  } ntp;
-
   struct timeval tv;
   gettimeofday(&tv, NULL);
-
-  ntp.parts.seconds = tv.tv_sec + 2208988800;
-  ntp.parts.fraction = (uint32_t)
-    ((double)(tv.tv_usec + 1) * (double)(1LL << 32) * 1.0e-6);
-
-  return ntp.full;
+  return (
+    ((uint64_t) tv.tv_sec + 2208988800L) << 32 |
+    ((uint32_t) (us2s(tv.tv_usec) * (double)4294967296L))
+  );
 }
+
 
 size_t makePacket(void* buffer, size_t size, std::string address, float number) {
   OSCPP::Client::Packet packet(buffer, size);
@@ -55,6 +48,7 @@ struct CVtoOSC : Module {
   bool isAddress1Dirty = false;
 
 	enum ParamId {
+    SAMPLE_RATE_PARAM,
 		PARAMS_LEN
 	};
 	enum InputId {
@@ -70,6 +64,7 @@ struct CVtoOSC : Module {
 
 	CVtoOSC() {
 		config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
+    configParam(SAMPLE_RATE_PARAM, 0.00001f, 10.f, 0.001f, "Sample Rate", "s");
 		configInput(CV1_INPUT, "CV1");
 	}
 
@@ -121,19 +116,18 @@ struct CVtoOSC : Module {
         0.f,
         12.f
     ) / 12.f;
+    float sampleRateParam = params[SAMPLE_RATE_PARAM].getValue();
 
     timer.process(args.sampleTime);
-    // DEBUG("t %f, lr %f", timer.getTime(), lastReset);
-    if (timer.getTime() - lastReset < 0.0001f) {
+    if (timer.getTime() < sampleRateParam) {
+      // DEBUG("t %f, lr %f, sr %f", timer.getTime(), lastReset, sampleRateParam);
       return;
     }
 
-    lastReset = timer.getTime();
     timer.reset();
 
     using boost::asio::ip::udp;
     using boost::asio::ip::address;
-
 
     boost::asio::io_service io_service;
     boost::system::error_code err;
@@ -147,7 +141,7 @@ struct CVtoOSC : Module {
     size_t size = makePacket(&buffer1, kMaxPacketSize, address1, cv1);
 
     // DEBUG("sending %f to %s", cv1, address1.c_str());
-    auto sent = socket.send_to(
+    socket.send_to(
       boost::asio::buffer(buffer1, size),
       remoteEndpoint,
       0,
@@ -157,7 +151,6 @@ struct CVtoOSC : Module {
     socket.close();
 
     if (err.value() == boost::system::errc::success) {
-      // DEBUG("sent %lu bits", sent);
       return;
     }
 
@@ -241,6 +234,8 @@ struct CVtoOSCWidget : ModuleWidget {
     addChild(address1Display);
 
 		addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH, 120), module, CVtoOSC::CV1_INPUT));
+
+    addParam(createParam<Trimpot>(Vec(RACK_GRID_WIDTH + 64, 120), module, CVtoOSC::SAMPLE_RATE_PARAM));
 	}
 };
 
