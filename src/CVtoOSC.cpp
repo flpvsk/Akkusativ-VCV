@@ -1,8 +1,11 @@
 #include "plugin.hpp"
 
+#include <nonstd/optional.hpp>
+#include <exception>
+
+#include <boost/bind/bind.hpp>
 #include <boost/asio.hpp>
 #include <boost/array.hpp>
-#include <boost/bind.hpp>
 
 #include <oscpp/client.hpp>
 
@@ -47,6 +50,9 @@ struct CVtoOSC : Module {
   std::string address1;
   bool isAddress1Dirty = false;
 
+  nonstd::optional<boost::asio::ip::udp::socket> socket;
+  nonstd::optional<boost::asio::ip::udp::endpoint> endpoint;
+
 	enum ParamId {
     SAMPLE_RATE_PARAM,
 		PARAMS_LEN
@@ -66,9 +72,17 @@ struct CVtoOSC : Module {
 		config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
     configParam(SAMPLE_RATE_PARAM, 0.00001f, 10.f, 0.001f, "Sample Rate", "s");
 		configInput(CV1_INPUT, "CV1");
+
+    boost::asio::io_service io_service;
+    socket = boost::asio::ip::udp::socket(io_service);
+    socket.value().open(boost::asio::ip::udp::v4());
+
+    endpoint = nonstd::nullopt;
 	}
 
   void onReset() override {
+    using boost::asio::ip::udp;
+
     timer.reset();
 
     url = "";
@@ -76,6 +90,9 @@ struct CVtoOSC : Module {
 
     address1 = "";
     isAddress1Dirty = true;
+
+    disconnect();
+    socket.value().open(udp::v4());
   }
 
   void fromJson(json_t* rootJ) override {
@@ -110,6 +127,79 @@ struct CVtoOSC : Module {
     isAddress1Dirty = true;
   }
 
+  void onUrlUpdate(std::string newUrl) {
+    using boost::asio::ip::udp;
+    using boost::asio::ip::address;
+    using boost::asio::ip::make_address;
+
+    url = newUrl;
+    isUrlDirty = false;
+
+    std::string ip;
+    std::string portStr;
+    bool hasIp = false;
+    bool hasPort = false;
+
+    int l = url.length();
+    for (int i = 0; i < l; i++) {
+      if (url[i] == ':' && hasIp) {
+        hasPort = false;
+        continue;
+      }
+
+      if (url[i] == ':' && !hasIp) {
+        hasIp = true;
+        continue;
+      }
+
+      if (hasIp) {
+        portStr.push_back(url[i]);
+        hasPort = true;
+        continue;
+      }
+
+      ip.push_back(url[i]);
+    }
+
+
+    if (!hasPort || !hasIp) {
+      endpoint = nonstd::nullopt;
+      return;
+    }
+
+    address parsed;
+    try {
+      parsed = make_address(ip);
+    } catch (const std::exception& e) {
+      DEBUG("Address is wrong %s", ip.c_str());
+      endpoint = nonstd::nullopt;
+      return;
+    }
+
+    int port = 0;
+    try {
+      port = stoi(portStr);
+    } catch (const std::exception& e) {
+      DEBUG("Port is wrong %s", portStr.c_str());
+      endpoint = nonstd::nullopt;
+      return;
+    }
+
+    DEBUG("Endpoint created %s:%d", ip.c_str(), port);
+    endpoint = udp::endpoint(parsed, port);
+  }
+
+  void disconnect() {
+    if (!socket.has_value() || !socket.value().is_open()) {
+      return;
+    }
+    socket.value().close();
+  }
+
+  void onRemove(const RemoveEvent& e) override {
+    disconnect();
+  }
+
 	void process(const ProcessArgs& args) override {
     float cv1 = clamp(
         inputs[CV1_INPUT].getVoltage(),
@@ -126,29 +216,20 @@ struct CVtoOSC : Module {
 
     timer.reset();
 
-    using boost::asio::ip::udp;
-    using boost::asio::ip::address;
+    if (!socket.has_value() || !socket.value().is_open()) return;
+    if (!endpoint.has_value()) return;
 
-    boost::asio::io_service io_service;
     boost::system::error_code err;
-
-    udp::socket socket(io_service);
-    udp::endpoint remoteEndpoint = udp::endpoint(
-      address::from_string("127.0.0.1"), 7500
-    );
-    socket.open(udp::v4());
 
     size_t size = makePacket(&buffer1, kMaxPacketSize, address1, cv1);
 
     // DEBUG("sending %f to %s", cv1, address1.c_str());
-    socket.send_to(
+    socket.value().send_to(
       boost::asio::buffer(buffer1, size),
-      remoteEndpoint,
+      endpoint.value(),
       0,
       err
     );
-
-    socket.close();
 
     if (err.value() == boost::system::errc::success) {
       return;
@@ -164,12 +245,12 @@ struct URLTextField: LedDisplayTextField {
   void step() override {
     LedDisplayTextField::step();
     if (!module || !module->isUrlDirty) return;
-    setText(module->url);
-    module->isUrlDirty = false;
+    module->onUrlUpdate(getText());
   }
 
   void onChange(const ChangeEvent& e) override {
-    if (module) module->url = getText();
+    if (!module) return;
+    module->onUrlUpdate(getText());
   }
 };
 
