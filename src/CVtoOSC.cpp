@@ -1,48 +1,31 @@
 #include "plugin.hpp"
 
+#include <memory>
 #include <nonstd/optional.hpp>
+#include <queue>
 #include <exception>
 
 #include <boost/bind/bind.hpp>
+#include <boost/tuple/tuple.hpp>
 #include <boost/asio.hpp>
 #include <boost/array.hpp>
 
-#include <oscpp/client.hpp>
+#include "OSCSender.cpp"
 
 #define MICROS_PER_SEC         1000000
 #define us2s(x) (((double)x)/(double)MICROS_PER_SEC)
 
-uint64_t getCurrentTime() {
+
+timeval getCurrentTime() {
   struct timeval tv;
   gettimeofday(&tv, NULL);
-  return (
-    ((uint64_t) tv.tv_sec + 2208988800L) << 32 |
-    ((uint32_t) (us2s(tv.tv_usec) * (double)4294967296L))
-  );
+  return tv;
 }
 
-
-size_t makePacket(void* buffer, size_t size, std::string address, float number) {
-  OSCPP::Client::Packet packet(buffer, size);
-  packet
-    .openBundle(getCurrentTime())
-      .openMessage(address.c_str(), 1)
-        .float32(number)
-      .closeMessage()
-      .openMessage("/u_speed", 1)
-        .float32(0.2f)
-      .closeMessage()
-    .closeBundle();
-  return packet.size();
-}
-
-const size_t kMaxPacketSize = 8192;
 
 struct CVtoOSC : Module {
   rack::dsp::TTimer<float> timer;
   float lastReset = 0.f;
-
-  std::array<char, kMaxPacketSize> buffer1;
 
   std::string url;
   bool isUrlDirty = false;
@@ -50,8 +33,7 @@ struct CVtoOSC : Module {
   std::string address1;
   bool isAddress1Dirty = false;
 
-  nonstd::optional<boost::asio::ip::udp::socket> socket;
-  nonstd::optional<boost::asio::ip::udp::endpoint> endpoint;
+  std::unique_ptr<OSCSender> oscSender;
 
 	enum ParamId {
     SAMPLE_RATE_PARAM,
@@ -72,17 +54,11 @@ struct CVtoOSC : Module {
 		config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
     configParam(SAMPLE_RATE_PARAM, 0.00001f, 10.f, 0.001f, "Sample Rate", "s");
 		configInput(CV1_INPUT, "CV1");
-
-    boost::asio::io_service io_service;
-    socket = boost::asio::ip::udp::socket(io_service);
-    socket.value().open(boost::asio::ip::udp::v4());
-
-    endpoint = nonstd::nullopt;
+    oscSender = std::unique_ptr<OSCSender>(new OSCSender());
+    oscSender->start();
 	}
 
-  void onReset() override {
-    using boost::asio::ip::udp;
-
+  void onReset(const ResetEvent& e) override {
     timer.reset();
 
     url = "";
@@ -90,14 +66,11 @@ struct CVtoOSC : Module {
 
     address1 = "";
     isAddress1Dirty = true;
-
-    disconnect();
-    socket.value().open(udp::v4());
   }
 
   void fromJson(json_t* rootJ) override {
     Module::fromJson(rootJ);
-    json_t* urlJ = json_object_get(rootJ, "url");
+    json_t* urlJ = json_object_get(rootJ, "ip:port");
     if (urlJ) url = json_string_value(urlJ);
     isUrlDirty = true;
 
@@ -108,7 +81,7 @@ struct CVtoOSC : Module {
 
   json_t* dataToJson() override {
     json_t* rootJ = json_object();
-    json_object_set_new(rootJ, "url", json_stringn(url.c_str(), url.size()));
+    json_object_set_new(rootJ, "ip:port", json_stringn(url.c_str(), url.size()));
     json_object_set_new(
       rootJ,
       "address1",
@@ -118,7 +91,7 @@ struct CVtoOSC : Module {
   }
 
   void dataFromJson(json_t* rootJ) override {
-    json_t* urlJ = json_object_get(rootJ, "url");
+    json_t* urlJ = json_object_get(rootJ, "ip:port");
     if (urlJ) url = json_string_value(urlJ);
     isUrlDirty = true;
 
@@ -128,6 +101,7 @@ struct CVtoOSC : Module {
   }
 
   void onUrlUpdate(std::string newUrl) {
+    DEBUG("on url update %s", newUrl.c_str());
     using boost::asio::ip::udp;
     using boost::asio::ip::address;
     using boost::asio::ip::make_address;
@@ -161,8 +135,15 @@ struct CVtoOSC : Module {
       ip.push_back(url[i]);
     }
 
+    nonstd::optional<boost::asio::ip::udp::endpoint> endpoint;
 
     if (!hasPort || !hasIp) {
+      DEBUG(
+        "Malformed string '%s' hasIp? %d hasPort? %d",
+        url.c_str(),
+        hasIp,
+        hasPort
+      );
       endpoint = nonstd::nullopt;
       return;
     }
@@ -187,17 +168,13 @@ struct CVtoOSC : Module {
 
     DEBUG("Endpoint created %s:%d", ip.c_str(), port);
     endpoint = udp::endpoint(parsed, port);
-  }
-
-  void disconnect() {
-    if (!socket.has_value() || !socket.value().is_open()) {
-      return;
-    }
-    socket.value().close();
+    oscSender->setEndpoint(std::move(endpoint.value()));
   }
 
   void onRemove(const RemoveEvent& e) override {
-    disconnect();
+    oscSender->stop();
+    oscSender.reset(nullptr);
+    DEBUG("xxx onRemove done xxx");
   }
 
 	void process(const ProcessArgs& args) override {
@@ -216,26 +193,22 @@ struct CVtoOSC : Module {
 
     timer.reset();
 
-    if (!socket.has_value() || !socket.value().is_open()) return;
-    if (!endpoint.has_value()) return;
+    OSCMessage msg1;
+    msg1.type = OSCMessage::FLOAT;
+    msg1.f = cv1;
+    msg1.address = address1;
 
-    boost::system::error_code err;
+    OSCMessage msg2;
+    msg2.type = OSCMessage::FLOAT;
+    msg2.f = 0.2;
+    msg2.address = "u_speed";
 
-    size_t size = makePacket(&buffer1, kMaxPacketSize, address1, cv1);
+    OSCBundle bundle;
+    bundle.time = getCurrentTime();
+    bundle.messages = new OSCMessage[2]{ msg1, msg2 };
+    bundle.messagesSize = 2;
 
-    // DEBUG("sending %f to %s", cv1, address1.c_str());
-    socket.value().send_to(
-      boost::asio::buffer(buffer1, size),
-      endpoint.value(),
-      0,
-      err
-    );
-
-    if (err.value() == boost::system::errc::success) {
-      return;
-    }
-
-    DEBUG("error sending message %s", err.message().c_str());
+    oscSender->send(std::move(bundle));
 	}
 };
 
@@ -245,7 +218,8 @@ struct URLTextField: LedDisplayTextField {
   void step() override {
     LedDisplayTextField::step();
     if (!module || !module->isUrlDirty) return;
-    module->onUrlUpdate(getText());
+    module->onUrlUpdate(module->url);
+    setText(module->url);
   }
 
   void onChange(const ChangeEvent& e) override {
@@ -292,6 +266,59 @@ struct AddressDisplay: LedDisplay {
 };
 
 
+struct PortDisplay: widget::Widget {
+	std::string fontPath;
+	std::string bgText;
+	std::string text;
+	float fontSize;
+	NVGcolor bgColor = nvgRGB(0x46,0x46, 0x46);
+	NVGcolor fgColor = SCHEME_YELLOW;
+	Vec textPos;
+
+  PortDisplay() {
+    fontPath = asset::system("res/fonts/DSEG7ClassicMini-BoldItalic.ttf");
+    textPos = Vec(2, 4);
+    bgText = "8888";
+    fontSize = 16;
+  }
+
+	void prepareFont(const DrawArgs& args) {
+		// Get font
+		std::shared_ptr<Font> font = APP->window->loadFont(fontPath);
+		if (!font)
+			return;
+		nvgFontFaceId(args.vg, font->handle);
+		nvgFontSize(args.vg, fontSize);
+		nvgTextLetterSpacing(args.vg, 0.0);
+		nvgTextAlign(args.vg, NVG_ALIGN_TOP | NVG_ALIGN_LEFT);
+	}
+
+	void draw(const DrawArgs& args) override {
+		// Background
+		nvgBeginPath(args.vg);
+		nvgRect(args.vg, 0, 0, box.size.x, box.size.y);
+		nvgFillColor(args.vg, nvgRGB(0x19, 0x19, 0x19));
+		nvgFill(args.vg);
+
+		prepareFont(args);
+
+		// Background text
+		nvgFillColor(args.vg, bgColor);
+		nvgText(args.vg, textPos.x, textPos.y, bgText.c_str(), NULL);
+	}
+
+	void drawLayer(const DrawArgs& args, int layer) override {
+		if (layer == 1) {
+			prepareFont(args);
+
+			// Foreground text
+			nvgFillColor(args.vg, fgColor);
+			nvgText(args.vg, textPos.x, textPos.y, text.c_str(), NULL);
+		}
+		Widget::drawLayer(args, layer);
+	}
+};
+
 struct CVtoOSCWidget : ModuleWidget {
 	CVtoOSCWidget(CVtoOSC* module) {
 		setModule(module);
@@ -304,19 +331,24 @@ struct CVtoOSCWidget : ModuleWidget {
 		addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
-    URLDisplay* urlDisplay = createWidget<URLDisplay>(Vec(0.0, 32));
+    URLDisplay* urlDisplay = createWidget<URLDisplay>(Vec(0, 32));
     urlDisplay->box.size = Vec(150, 32);
     urlDisplay->setModule(module);
     addChild(urlDisplay);
 
-    AddressDisplay* address1Display = createWidget<AddressDisplay>(Vec(0.0, 76));
+    PortDisplay* portDisplay = createWidget<PortDisplay>(Vec(0, 76));
+    portDisplay->box.size = Vec(150, 24);
+    addChild(portDisplay);
+
+    AddressDisplay* address1Display = createWidget<AddressDisplay>(Vec(0, 120));
     address1Display->box.size = Vec(150, 32);
     address1Display->setModule(module);
     addChild(address1Display);
 
-		addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH, 120), module, CVtoOSC::CV1_INPUT));
 
-    addParam(createParam<Trimpot>(Vec(RACK_GRID_WIDTH + 64, 120), module, CVtoOSC::SAMPLE_RATE_PARAM));
+		addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH, 164), module, CVtoOSC::CV1_INPUT));
+
+    addParam(createParam<Trimpot>(Vec(RACK_GRID_WIDTH + 64, 164), module, CVtoOSC::SAMPLE_RATE_PARAM));
 	}
 };
 

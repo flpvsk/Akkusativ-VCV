@@ -1,0 +1,10 @@
+[
+{
+  "directory": "/Users/flpvsk/projects/vcv/Rack/plugins/Akkusativ/build",
+  "command": "c++  -std=c++11 -stdlib=libc++  -I/Users/flpvsk/projects/vcv/Rack/plugins/Akkusativ/vcpkg_installed/x64-osx/include  -I/Users/flpvsk/projects/vcv/Rack/plugins/Akkusativ/include  -fPIC -I/Users/flpvsk/projects/vcv/Rack/include -I/Users/flpvsk/projects/vcv/Rack/dep/include -MMD -MP -g -O3 -march=nehalem -funsafe-math-optimizations -fno-omit-frame-pointer -Wall -Wextra -Wno-unused-parameter -DARCH_MAC -mmacosx-version-min=10.9  -c -o /Users/flpvsk/projects/vcv/Rack/plugins/Akkusativ/build/src/CVtoOSC.cpp.o /Users/flpvsk/projects/vcv/Rack/plugins/Akkusativ/src/CVtoOSC.cpp",
+  "file": "/Users/flpvsk/projects/vcv/Rack/plugins/Akkusativ/src/CVtoOSC.cpp"
+}
+]
+
+
+
