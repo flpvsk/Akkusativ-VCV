@@ -212,11 +212,101 @@ struct CVtoOSC : Module {
 	}
 };
 
-struct URLTextField: LedDisplayTextField {
+struct URLTextField: ui::TextField {
   CVtoOSC* module;
 
+  std::string fontPath;
+  math::Vec textOffset;
+  float baseHue;
+
+  URLTextField() {
+    fontPath = asset::system("res/fonts/ShareTechMono-Regular.ttf");
+    baseHue = 100. / 360.;
+    placeholder = "e.g.127.0.0.1:7500";
+  }
+
+  void draw(const DrawArgs& args) override {
+    Widget::draw(args);
+  }
+
+  void drawLayer(const DrawArgs& args, int layer) override {
+    nvgScissor(args.vg, RECT_ARGS(args.clipBox));
+
+    // ui::TextField::draw(args);
+    if (layer != 1) {
+      Widget::drawLayer(args, layer);
+      nvgResetScissor(args.vg);
+      return;
+    }
+
+    BNDwidgetTheme textFieldTheme;
+    NVGcolor cDisabled = nvgHSL(0, 0, 0.2);
+    NVGcolor cInactive = nvgHSL(baseHue, 1.0, 0.2);
+    NVGcolor cActive = nvgHSL(baseHue, 1.0, 0.5);
+    NVGcolor bg = {{{ 0, 0, 0, 1 }}};
+
+    textFieldTheme.shadeTop = 0;
+    textFieldTheme.shadeDown = 0;
+    textFieldTheme.outlineColor = bg;
+
+    textFieldTheme.innerColor = bg;
+    textFieldTheme.innerSelectedColor = bg;
+    textFieldTheme.itemColor = cDisabled;
+
+    textFieldTheme.textColor = cInactive;
+    textFieldTheme.textSelectedColor = cActive;
+
+    std::shared_ptr<window::Font> font = APP->window->loadFont(fontPath);
+		if (font && font->handle >= 0) {
+			bndSetFont(font->handle);
+    }
+
+    BNDwidgetState state = BND_DEFAULT;
+    if (this == APP->event->hoveredWidget) state = BND_HOVER;
+    if (this == APP->event->selectedWidget) state = BND_ACTIVE;
+
+    int begin = std::min(cursor, selection);
+    int end = std::max(cursor, selection);
+
+    float cr[4];
+    NVGcolor shade_top, shade_down;
+
+    bndSelectCorners(cr, BND_TEXT_RADIUS, BND_CORNER_NONE);
+    bndBevelInset(args.vg, 0, 0, box.size.x, box.size.y, cr[2], cr[3]);
+    bndInnerColors(&shade_top, &shade_down, &textFieldTheme, state, 0);
+    bndInnerBox(args.vg, 0, 0, box.size.x, box.size.y, cr[0], cr[1], cr[2], cr[3], shade_top, shade_down);
+    bndOutlineBox(args.vg, 0, 0, box.size.x, box.size.y, cr[0], cr[1], cr[2], cr[3], bndTransparent(textFieldTheme.outlineColor));
+    if (state != BND_ACTIVE) {
+        end = -1;
+    }
+
+    if (text.empty()) {
+      bndIconLabelCaret(args.vg, 32, 0, box.size.x, box.size.y, -1, textFieldTheme.itemColor, 13, placeholder.c_str(), textFieldTheme.itemColor, 0, -1);
+    }
+
+    bndIconLabelValue(
+      args.vg, 0., 0., 46, box.size.y, -1,
+      cDisabled, BND_LEFT, BND_LABEL_FONT_SIZE,
+      "HOST", NULL
+    );
+
+    bndIconLabelCaret(args.vg, 32, 0., box.size.x, box.size.y - 16., -1,
+        bndTextColor(&textFieldTheme, state), BND_LABEL_FONT_SIZE,
+        text.c_str(), textFieldTheme.itemColor, begin, end);
+
+    nvgBeginPath(args.vg);
+    nvgCircle(args.vg, box.size.x - 4, 10, 2);
+    nvgFillColor(args.vg, cDisabled);
+    nvgFill(args.vg);
+
+    bndSetFont(APP->window->uiFont->handle);
+    Widget::drawLayer(args, layer);
+    nvgResetScissor(args.vg);
+  }
+
+
   void step() override {
-    LedDisplayTextField::step();
+    ui::TextField::step();
     if (!module || !module->isUrlDirty) return;
     module->onUrlUpdate(module->url);
     setText(module->url);
@@ -331,24 +421,24 @@ struct CVtoOSCWidget : ModuleWidget {
 		addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
-    URLDisplay* urlDisplay = createWidget<URLDisplay>(Vec(0, 32));
-    urlDisplay->box.size = Vec(150, 32);
+    URLDisplay* urlDisplay = createWidget<URLDisplay>(Vec(0, 52));
+    urlDisplay->box.size = Vec(165, 20);
     urlDisplay->setModule(module);
     addChild(urlDisplay);
 
-    PortDisplay* portDisplay = createWidget<PortDisplay>(Vec(0, 76));
-    portDisplay->box.size = Vec(150, 24);
+    PortDisplay* portDisplay = createWidget<PortDisplay>(Vec(0, 100));
+    portDisplay->box.size = Vec(165, 24);
     addChild(portDisplay);
 
-    AddressDisplay* address1Display = createWidget<AddressDisplay>(Vec(0, 120));
-    address1Display->box.size = Vec(150, 32);
+    AddressDisplay* address1Display = createWidget<AddressDisplay>(Vec(0, 154));
+    address1Display->box.size = Vec(165, 32);
     address1Display->setModule(module);
     addChild(address1Display);
 
 
-		addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH, 164), module, CVtoOSC::CV1_INPUT));
+		addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH, 184), module, CVtoOSC::CV1_INPUT));
 
-    addParam(createParam<Trimpot>(Vec(RACK_GRID_WIDTH + 64, 164), module, CVtoOSC::SAMPLE_RATE_PARAM));
+    addParam(createParam<Trimpot>(Vec(RACK_GRID_WIDTH + 64, 184), module, CVtoOSC::SAMPLE_RATE_PARAM));
 	}
 };
 
