@@ -29,6 +29,7 @@ struct CVtoOSC : Module {
 
   std::string url;
   bool isUrlDirty = false;
+  bool isUrlValid = false;
 
   std::string address1;
   bool isAddress1Dirty = false;
@@ -136,6 +137,7 @@ struct CVtoOSC : Module {
     }
 
     nonstd::optional<boost::asio::ip::udp::endpoint> endpoint;
+    isUrlValid = false;
 
     if (!hasPort || !hasIp) {
       DEBUG(
@@ -169,11 +171,11 @@ struct CVtoOSC : Module {
     DEBUG("Endpoint created %s:%d", ip.c_str(), port);
     endpoint = udp::endpoint(parsed, port);
     oscSender->setEndpoint(std::move(endpoint.value()));
+    isUrlValid = true;
   }
 
   void onRemove(const RemoveEvent& e) override {
     oscSender->stop();
-    oscSender.reset(nullptr);
     DEBUG("xxx onRemove done xxx");
   }
 
@@ -216,7 +218,6 @@ struct URLTextField: ui::TextField {
   CVtoOSC* module;
 
   std::string fontPath;
-  math::Vec textOffset;
   float baseHue;
 
   URLTextField() {
@@ -241,7 +242,7 @@ struct URLTextField: ui::TextField {
 
     BNDwidgetTheme textFieldTheme;
     NVGcolor cDisabled = nvgHSL(0, 0, 0.2);
-    NVGcolor cInactive = nvgHSL(baseHue, 1.0, 0.2);
+    NVGcolor cInactive = nvgHSL(baseHue, 1.0, 0.3);
     NVGcolor cActive = nvgHSL(baseHue, 1.0, 0.5);
     NVGcolor bg = {{{ 0, 0, 0, 1 }}};
 
@@ -295,8 +296,11 @@ struct URLTextField: ui::TextField {
         text.c_str(), textFieldTheme.itemColor, begin, end);
 
     nvgBeginPath(args.vg);
-    nvgCircle(args.vg, box.size.x - 4, 10, 2);
+    nvgCircle(args.vg, box.size.x - 10, 10, 2);
     nvgFillColor(args.vg, cDisabled);
+    if (module->isUrlValid) {
+      nvgFillColor(args.vg, cInactive);
+    }
     nvgFill(args.vg);
 
     bndSetFont(APP->window->uiFont->handle);
@@ -421,17 +425,19 @@ struct CVtoOSCWidget : ModuleWidget {
 		addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
-    URLDisplay* urlDisplay = createWidget<URLDisplay>(Vec(0, 52));
-    urlDisplay->box.size = Vec(165, 20);
+    float h = 0;
+
+    URLDisplay* urlDisplay = createWidget<URLDisplay>(Vec(0, h += 52));
+    urlDisplay->box.size = Vec(180, 20);
     urlDisplay->setModule(module);
     addChild(urlDisplay);
 
-    PortDisplay* portDisplay = createWidget<PortDisplay>(Vec(0, 100));
-    portDisplay->box.size = Vec(165, 24);
-    addChild(portDisplay);
+    // PortDisplay* portDisplay = createWidget<PortDisplay>(Vec(0, 100));
+    // portDisplay->box.size = Vec(180, 24);
+    // addChild(portDisplay);
 
-    AddressDisplay* address1Display = createWidget<AddressDisplay>(Vec(0, 154));
-    address1Display->box.size = Vec(165, 32);
+    AddressDisplay* address1Display = createWidget<AddressDisplay>(Vec(0, h+= 32));
+    address1Display->box.size = Vec(180, 32);
     address1Display->setModule(module);
     addChild(address1Display);
 
