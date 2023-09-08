@@ -134,7 +134,7 @@ class OSCSender final {
 
     _watchdog_thread = new std::thread([&] {
       OSCBundle data;
-      while (_is_running.load(std::memory_order_relaxed)) {
+      while (_is_running.load(std::memory_order_seq_cst)) {
         while (_queue.pop(data)) {
           size_t size = makePacket(&_buffer, kMaxPacketSize, data);
           // delete[] data.messages;
@@ -163,6 +163,7 @@ class OSCSender final {
   }
 
   void send(OSCBundle data) {
+    if (!_is_running.load(std::memory_order_seq_cst)) return;
     while (!_queue.push(data)) ;
   }
 
@@ -173,19 +174,21 @@ class OSCSender final {
   void stop() {
     if (_is_running.exchange(false, std::memory_order_seq_cst)) return;
 
-    if (_io_thread != nullptr) {
+    if (_io_thread != nullptr && _io_thread->joinable()) {
       _io_thread->join();
       delete _io_thread;
       _io_thread = nullptr;
     }
 
-    if (_watchdog_thread != nullptr) {
+    if (_watchdog_thread != nullptr && _watchdog_thread->joinable()) {
       _watchdog_thread->join();
       delete _watchdog_thread;
       _watchdog_thread = nullptr;
     }
 
-    _socket.close();
+    if (_socket.is_open()) {
+      _socket.close();
+    }
   }
 
   private:
