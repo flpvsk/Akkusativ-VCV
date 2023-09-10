@@ -8,6 +8,10 @@
       "version>=": "1.80.0#1"
     },
     {
+      "name": "boost-thread",
+      "version>=": "1.80.0"
+    },
+    {
       "name": "boost-lockfree",
       "version>=": "1.80.0"
     },

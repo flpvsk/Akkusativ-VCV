@@ -41,6 +41,7 @@ struct CVtoOSC : Module {
   };
   enum InputId {
     CV1_INPUT,
+    CV2_INPUT,
     INPUTS_LEN
   };
   enum OutputId {
@@ -52,13 +53,17 @@ struct CVtoOSC : Module {
 
   CVtoOSC() {
     config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
-    configParam(SAMPLE_RATE_PARAM, 0.1f, 10.f, 0.01f, "Sample Rate", "s");
+    configParam(SAMPLE_RATE_PARAM, 0.01f, 10.f, 0.01f, "Sample Rate", "s");
     configInput(CV1_INPUT, "CV1");
+    configInput(CV2_INPUT, "CV2");
     oscSender = std::unique_ptr<OSCSender>(new OSCSender());
   }
 
-  void onReset(const ResetEvent &e) override {
+  void onAdd(const AddEvent &e) override {
     oscSender->start();
+  }
+
+  void onReset(const ResetEvent &e) override {
     timer.reset();
 
     url = "";
@@ -178,12 +183,17 @@ struct CVtoOSC : Module {
 
   void onRemove(const RemoveEvent &e) override {
     oscSender->stop();
-    DEBUG("xxx onRemove done xxx");
+    DEBUG("onRemove done");
   }
 
   void process(const ProcessArgs &args) override {
     float cv1 = (clamp(
       inputs[CV1_INPUT].getVoltage(),
+      -10.f,
+      10.f
+    ) + 10.f) / 20.f;
+    float cv2 = (clamp(
+      inputs[CV2_INPUT].getVoltage(),
       -10.f,
       10.f
     ) + 10.f) / 20.f;
@@ -197,21 +207,27 @@ struct CVtoOSC : Module {
 
     timer.reset();
 
-    OSCMessage msg1;
-    msg1.type = OSCMessage::FLOAT;
-    msg1.f = cv1;
-    msg1.address = address1;
 
-    // OSCMessage msg2;
-    // msg2.type = OSCMessage::FLOAT;
-    // msg2.f = 0.2;
-    // msg2.address = "u_speed";
+    OSCMessageValue val1{
+      .type = OSCMessageValue::FLOAT,
+      .f = cv1
+    };
+
+    OSCMessageValue val2{
+      .type = OSCMessageValue::FLOAT,
+      .f = cv2
+    };
+
+
+    OSCMessage msg1{
+      .address = address1,
+      .valuesSize = 2,
+      .values = new OSCMessageValue[2]{val1, val2}
+    };
 
     OSCBundle bundle{
-      .time =  getCurrentTime(),
-      // .messagesSize = 2,
+      .time = getCurrentTime(),
       .messagesSize = 1,
-      // .messages = new OSCMessage[1]{msg1, msg2},
       .messages = new OSCMessage[1]{msg1},
     };
 
@@ -473,8 +489,9 @@ struct CVtoOSCWidget : ModuleWidget {
     addChild(address1Display);
 
     addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH, 184), module, CVtoOSC::CV1_INPUT));
+    addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH + 32, 184), module, CVtoOSC::CV2_INPUT));
 
-    addParam(createParam<Trimpot>(Vec(RACK_GRID_WIDTH + 64, 184), module, CVtoOSC::SAMPLE_RATE_PARAM));
+    addParam(createParam<Trimpot>(Vec(RACK_GRID_WIDTH + 96, 180), module, CVtoOSC::SAMPLE_RATE_PARAM));
   }
 };
 
