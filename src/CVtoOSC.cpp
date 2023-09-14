@@ -24,6 +24,7 @@ timeval getCurrentTime() {
 
 struct CVtoOSC : Module {
   rack::dsp::TTimer<float> timer;
+  rack::dsp::SchmittTrigger sendTrigger;
   // float lastReset = 0.f;
 
   std::string url;
@@ -42,6 +43,7 @@ struct CVtoOSC : Module {
   enum InputId {
     CV1_INPUT,
     CV2_INPUT,
+    SEND_TRIG_INPUT,
     INPUTS_LEN
   };
   enum OutputId {
@@ -56,6 +58,7 @@ struct CVtoOSC : Module {
     configParam(SAMPLE_RATE_PARAM, 0.01f, 10.f, 0.01f, "Sample Rate", "s");
     configInput(CV1_INPUT, "CV1");
     configInput(CV2_INPUT, "CV2");
+    configInput(SEND_TRIG_INPUT, "Trigger send");
     oscSender = std::unique_ptr<OSCSender>(new OSCSender());
   }
 
@@ -198,9 +201,28 @@ struct CVtoOSC : Module {
       10.f
     ) + 10.f) / 20.f;
     float sampleRateParam = params[SAMPLE_RATE_PARAM].getValue();
+    auto sendInput = inputs[SEND_TRIG_INPUT];
+
+    if (
+      sendInput.isConnected() &&
+      !sendTrigger.process(
+        rescale(
+          sendInput.getVoltage(),
+          0.0f,
+          5.0f,
+          0.f,
+          1.f
+        )
+      )
+    ) {
+      return;
+    }
 
     timer.process(args.sampleTime);
-    if (timer.getTime() < sampleRateParam) {
+    if (
+      !sendInput.isConnected() &&
+      timer.getTime() < sampleRateParam
+    ) {
       // DEBUG("t %f, lr %f, sr %f", timer.getTime(), lastReset, sampleRateParam);
       return;
     }
@@ -491,7 +513,8 @@ struct CVtoOSCWidget : ModuleWidget {
     addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH, 184), module, CVtoOSC::CV1_INPUT));
     addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH + 32, 184), module, CVtoOSC::CV2_INPUT));
 
-    addParam(createParam<Trimpot>(Vec(RACK_GRID_WIDTH + 96, 180), module, CVtoOSC::SAMPLE_RATE_PARAM));
+    addParam(createParam<Trimpot>(Vec(RACK_GRID_WIDTH + 96, 176), module, CVtoOSC::SAMPLE_RATE_PARAM));
+    addInput(createInputCentered<PJ301MPort>(Vec(RACK_GRID_WIDTH + 96 + 32, 184), module, CVtoOSC::SEND_TRIG_INPUT));
   }
 };
 
